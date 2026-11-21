@@ -1,0 +1,65 @@
+name: 更新榜单快照
+
+on:
+  schedule:
+    # 榜单多在 UTC 09:00 前后刷新，留出缓冲后各抓一次
+    - cron: '20 10 * * *'
+    - cron: '20 22 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: caliper-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 抓取并对比
+        id: upd
+        run: |
+          python3 scripts/ci_update.py | tee /tmp/out.txt
+          grep -o 'CHANGED=[01]' /tmp/out.txt | tail -1 | cut -d= -f2 > /tmp/changed
+          echo "changed=$(cat /tmp/changed)" >> "$GITHUB_OUTPUT"
+
+      - name: 上传原始快照
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-${{ github.run_number }}
+          path: archive/*.html
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: 写入运行摘要
+        if: always()
+        run: |
+          {
+            echo "### Caliper Bench 更新"
+            echo
+            echo '```'
+            tail -40 /tmp/out.txt 2>/dev/null || echo "(无输出)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 提交变更
+        if: steps.upd.outputs.changed == '1'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "无暂存变更"
+            exit 0
+          fi
+          git commit -m "chore: 更新榜单快照 $(date -u +%Y-%m-%d)"
+          git push

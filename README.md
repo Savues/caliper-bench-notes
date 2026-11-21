@@ -10,9 +10,34 @@
 |---|---|
 | `scripts/` | 抓取、差分、排行、NSFW 导出、网关对照 |
 | `docs/结论速查.md` | 按用途分类的选型结论（持续更新） |
-| `docs/changelog.md` | 每期快照变化记录 |
+| `docs/changelog.md` | 每期快照变化记录（人工维护） |
+| `docs/changelog-auto.md` | CI 每期自动追加的汇总行 |
+| `docs/diffs/` | 每期完整差分报告（自动生成） |
 | `docs/字段说明.md` | 榜单列的含义与坑 |
+| `data/state.json.gz` | 榜单压缩状态（约 58 KB），CI 用于对比上一期 |
 | `archive/` | 历史快照（不入库，见下） |
+
+## 自动更新
+
+`.github/workflows/update.yml` 每天两次（UTC 10:20 / 22:20）抓取，无需人工干预。
+
+```text
+抓取 → 压缩成 data/state.json.gz → 与上一份对比
+     → 有变化：写 docs/diffs/<时间戳>.md，追加一行到 docs/changelog-auto.md，提交
+     → 无变化：跳过提交（但每 7 天至少提交一次心跳，防止定时任务被停）
+```
+
+几个设计取舍：
+
+| 问题 | 处理 |
+|---|---|
+| 整页 3.4 MB/期，逐期入库一年涨到 GB 级 | 只提交压缩状态（58 KB）和差分报告；原始 HTML 走 artifact，保留 90 天 |
+| 站点拒绝 `Python-urllib` UA（403） | `fetch.py` 伪装 Chrome UA |
+| 分块传输到 3.3 MB 抛 `IncompleteRead` | 保留已读部分 + 校验必须含 `const DATA = `，最多重试 4 次 |
+| GitHub 会在仓库 60 天无活动后停掉定时任务 | `data/last_check.json` 心跳，最迟 7 天提交一次 |
+| 定时任务不准时 | 是最低优先级队列，高峰期可能延迟数分钟到数十分钟，极端情况会跳过。要精确时刻得用外部调度 |
+
+手动触发：Actions → 「更新榜单快照」→ Run workflow。
 
 ## 快速开始
 
