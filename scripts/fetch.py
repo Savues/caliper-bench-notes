@@ -37,10 +37,20 @@ def _once(url, insecure=False):
             return e.partial
 
 
+def _complete(body):
+    """整页判定：内嵌数据存在且文档正常收尾。
+
+    只看 `const DATA = ` 不够 —— 截断页面前半部分也有这个标记，
+    但 JSON 没写完，后续解析会炸，还会覆盖掉完整的历史归档。
+    """
+    if not body or b'const DATA = ' not in body:
+        return False
+    return body.rstrip()[-16:].lower().endswith(b'</html>')
+
+
 def fetch(url=URL, retries=RETRIES):
-    """返回完整 HTML。校验必须包含 `const DATA = `，否则重试。"""
+    """返回完整 HTML；不完整则重试，最终仍不完整返回空。"""
     insecure = False
-    last = b''
     for attempt in range(retries):
         try:
             body = _once(url, insecure)
@@ -51,29 +61,35 @@ def fetch(url=URL, retries=RETRIES):
             print(f'  第 {attempt + 1} 次失败：{exc}')
             time.sleep(3 * (attempt + 1))
             continue
-        last = body
-        if b'const DATA = ' in body:
+        if _complete(body):
             return body
-        print(f'  第 {attempt + 1} 次取到不完整页面（{len(body) / 1e6:.1f} MB），重试')
+        print(f'  第 {attempt + 1} 次取到不完整页面（{len(body) / 1e6:.2f} MB，'
+              f'尾部={body[-24:]!r}），重试')
         time.sleep(3 * (attempt + 1))
-    if last:
-        print(f'  警告：返回最后一次不完整结果（{len(last) / 1e6:.1f} MB）')
-    return last
+    print('  抓取失败：多次重试仍未拿到完整页面')
+    return b''
 
 
 def main():
     html = fetch()
-    if b'const DATA = ' not in html:
-        raise SystemExit('抓取失败：页面不完整，未写入')
+    if not html:
+        raise SystemExit('抓取失败：未拿到完整页面，未写入任何文件')
     text = html.decode('utf-8', 'ignore')
     m = re.search(r'generated (\d{4}-\d\d-\d\d \d\d:\d\d) UTC', text)
     stamp = (m.group(1) if m else 'unknown').replace(' ', '_').replace(':', '')
     d = os.path.join(ROOT, 'archive')
     os.makedirs(d, exist_ok=True)
     path = os.path.join(d, stamp + '.html')
-    if os.path.exists(path) and open(path, 'rb').read() == html:
-        print('未变化：' + path)
-        return
+    if os.path.exists(path):
+        old = open(path, 'rb').read()
+        if old == html:
+            print('未变化：' + path)
+            return
+        if len(old) > len(html):
+            # 同期已有更完整的归档，绝不用更小的覆盖
+            print(f'跳过：{path} 已有更完整版本（{len(old) / 1e6:.2f} MB > '
+                  f'{len(html) / 1e6:.2f} MB）')
+            return
     with open(path, 'wb') as f:
         f.write(html)
     print(f'已保存 {path}  ({len(html) / 1e6:.1f} MB)')
